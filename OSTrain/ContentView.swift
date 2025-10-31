@@ -228,7 +228,7 @@ struct ContentView: View {
             let margin: CGFloat = 16
             let leftCenter = CGPoint(x: max(leftRadius + margin, totalW * 0.12), y: 100)
             let rightCenter = CGPoint(x: totalW - max(rightRadius + margin, totalW * 0.12), y: 100)
-            let sourcePile = CGPoint(x: leftCenter.x + leftRadius + 40, y: leftCenter.y + 80)
+            let sourcePile = CGPoint(x: leftCenter.x + leftRadius + 180, y: leftCenter.y + 120)
 
             // Train parameters
             let t = trainProgress.clamped(to: 0...1)
@@ -261,16 +261,25 @@ struct ContentView: View {
                     let hy = sourcePile.y + (leftCenter.y - sourcePile.y) * progress
                     ZStack {
                         Image(systemName: "figure.walk")
-                            .font(.system(size: 28, weight: .regular))
-                            .foregroundStyle(.primary)
-                        if p.status == .colocando || p.status == .empacotando {
+                            .font(.system(size: 32, weight: .regular))
+                            .foregroundStyle(p.status == .dormindo ? .secondary : .primary)
+                        // Show the carried box while packing, placing, and also while sleeping (box ready to deposit)
+                        if p.status == .colocando || p.status == .empacotando || p.status == .dormindo {
                             Image(systemName: "shippingbox")
-                                .font(.system(size: 18))
-                                .offset(x: -10, y: -24)
+                                .font(.system(size: 20))
+                                .offset(x: -12, y: -28)
+                        }
+                        // Add a subtle sleep indicator when dormant
+                        if p.status == .dormindo {
+                            Image(systemName: "zzz")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                                .offset(x: 14, y: -26)
                         }
                     }
                     .position(x: hx, y: hy)
-                    .animation(.linear(duration: 0.2), value: p.progress)
+                    // Slow down to make both forward and return trips clearly animated
+                    .animation(.linear(duration: 0.9), value: p.progress)
                 }
 
                 // Train moving along a parabola
@@ -356,3 +365,4 @@ struct Chip: View {
             .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }
+
