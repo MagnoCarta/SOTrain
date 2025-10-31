@@ -1,6 +1,7 @@
 import SwiftUI
 import Foundation
 import Observation
+import Combine
 
 
 // MARK: - SwiftUI
@@ -36,6 +37,8 @@ struct ContentView: View {
     @State private var editingPackerId: Int? = nil
     @State private var editPackerName: String = ""
     @State private var editPackerTeMs: Int = 500
+    @State private var trainDisplayProgress: Double = 0
+    @State private var displayLink = Timer.publish(every: 1.0/60.0, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(spacing: 16) {
@@ -46,6 +49,8 @@ struct ContentView: View {
         .padding()
         .onAppear {
             if isRunning { model.start() }
+            // Initialize display-linked progress to current model progress
+            trainDisplayProgress = trainProgress.clamped(to: 0...1)
         }
         .onChange(of: selectedScenario) { _, newValue in
             // If running, restart with the new scenario
@@ -54,6 +59,12 @@ struct ContentView: View {
                 model = buildModel(from: newValue)
                 model.start()
             }
+        }
+        .onReceive(displayLink) { _ in
+            // Smoothly interpolate the display progress toward the model's progress at 60 Hz
+            let target = trainProgress.clamped(to: 0...1)
+            let alpha: Double = 0.35 // smoothing factor (0-1); higher is snappier
+            trainDisplayProgress = (1 - alpha) * trainDisplayProgress + alpha * target
         }
         .toolbar {
             ToolbarItem(placement: .principal) {
@@ -128,8 +139,15 @@ struct ContentView: View {
                 Form {
                     Section("Empacotador") {
                         TextField("Nome", text: $newPackerName)
-                        Stepper(value: $newPackerTeMs, in: 50...6000, step: 50) {
-                            Text("te = \(newPackerTeMs) ms")
+                        HStack(spacing: 8) {
+                            Stepper(value: $newPackerTeMs, in: 1...Int.max, step: 50) { Text("te = \(newPackerTeMs) ms") }
+                            TextField("te (ms)", value: $newPackerTeMs, format: .number)
+                                .frame(width: 90)
+                                .textFieldStyle(.roundedBorder)
+                                .multilineTextAlignment(.trailing)
+                                .onChange(of: newPackerTeMs) { _, newVal in
+                                    if newVal < 1 { newPackerTeMs = 1 }
+                                }
                         }
                     }
                 }
@@ -159,8 +177,15 @@ struct ContentView: View {
                 Form {
                     Section("Empacotador") {
                         TextField("Nome", text: $editPackerName)
-                        Stepper(value: $editPackerTeMs, in: 50...6000, step: 50) {
-                            Text("te = \(editPackerTeMs) ms")
+                        HStack(spacing: 8) {
+                            Stepper(value: $editPackerTeMs, in: 1...Int.max, step: 50) { Text("te = \(editPackerTeMs) ms") }
+                            TextField("te (ms)", value: $editPackerTeMs, format: .number)
+                                .frame(width: 90)
+                                .textFieldStyle(.roundedBorder)
+                                .multilineTextAlignment(.trailing)
+                                .onChange(of: editPackerTeMs) { _, newVal in
+                                    if newVal < 1 { editPackerTeMs = 1 }
+                                }
                         }
                     }
                     if uiMode == .laboratory && !isRunning {
@@ -325,7 +350,7 @@ struct ContentView: View {
             let sourcePile = CGPoint(x: leftCenter.x + leftRadius + 180, y: leftCenter.y + 120)
 
             // Train parameters
-            let t = trainProgress.clamped(to: 0...1)
+            let t = trainDisplayProgress.clamped(to: 0...1)
             let startX = leftCenter.x + leftRadius
             let endX = rightCenter.x - rightRadius
             let x = startX + (endX - startX) * t
