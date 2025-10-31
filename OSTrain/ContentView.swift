@@ -31,6 +31,12 @@ struct ContentView: View {
     @State private var newPackerTeMs: Int = 500
     @State private var lastProgressByPacker: [Int: Double] = [:]
 
+    @State private var showEditPackerSheet: Bool = false
+    @State private var editingPackerIndex: Int? = nil
+    @State private var editingPackerId: Int? = nil
+    @State private var editPackerName: String = ""
+    @State private var editPackerTeMs: Int = 500
+
     var body: some View {
         VStack(spacing: 16) {
             if uiMode == .scenarios { header } else { labHeader }
@@ -148,6 +154,61 @@ struct ContentView: View {
                 }
             }
         }
+        .sheet(isPresented: $showEditPackerSheet) {
+            NavigationStack {
+                Form {
+                    Section("Empacotador") {
+                        TextField("Nome", text: $editPackerName)
+                        Stepper(value: $editPackerTeMs, in: 50...6000, step: 50) {
+                            Text("te = \(editPackerTeMs) ms")
+                        }
+                    }
+                    if uiMode == .laboratory && !isRunning {
+                        Section {
+                            Button(role: .destructive) {
+                                if let idx = editingPackerIndex, uiMode == .laboratory && !isRunning {
+                                    labPackers.remove(at: idx)
+                                }
+                                showEditPackerSheet = false
+                            } label: {
+                                Label("Remover Empacotador", systemImage: "trash")
+                            }
+                        }
+                    }
+                }
+                .navigationTitle("Editar Empacotador")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancelar") { showEditPackerSheet = false }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Salvar") {
+                            if uiMode == .laboratory && !isRunning {
+                                if let idx = editingPackerIndex, labPackers.indices.contains(idx) {
+                                    labPackers[idx].name = editPackerName.isEmpty ? labPackers[idx].name : editPackerName
+                                    labPackers[idx].teMs = editPackerTeMs
+                                }
+                            } else if uiMode == .laboratory && isRunning {
+                                // Best-effort update when running: update visible model packer if index is valid
+                                if let idx = editingPackerIndex, model.packers.indices.contains(idx) {
+                                    model.packers[idx].name = editPackerName.isEmpty ? model.packers[idx].name : editPackerName
+                                    model.packers[idx].teMs = editPackerTeMs
+                                }
+                            }
+                            showEditPackerSheet = false
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func beginEditingPacker(index: Int, packer: PackerViewModel) {
+        editingPackerIndex = index
+        editingPackerId = packer.id
+        editPackerName = packer.name
+        editPackerTeMs = packer.teMs
+        showEditPackerSheet = true
     }
 
     private func buildModel(from scenario: SimulationScenario) -> SimulationModel {
@@ -164,7 +225,8 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
             Text("Depósito: \(model.depositoCount)/\(model.M)")
                 .font(.headline)
-            ProgressView(value: Double(model.depositoCount), total: Double(model.M))
+            ProgressView(value: Double(model.depositoCount.clamped(to: 0...max(1, model.M))),
+                         total: Double(max(1, model.M)))
             HStack(spacing: 12) {
                 Chip(text: "N = \(model.N)")
                 Chip(text: "tv = \(model.tvMs) ms")
@@ -224,7 +286,8 @@ struct ContentView: View {
             }
             Text("Depósito: \(model.depositoCount)/\(model.M)")
                 .font(.headline)
-            ProgressView(value: Double(model.depositoCount), total: Double(model.M))
+            ProgressView(value: Double(model.depositoCount.clamped(to: 0...max(1, model.M))),
+                         total: Double(max(1, model.M)))
             HStack(spacing: 12) {
                 Chip(text: "N = \(uiMode == .scenarios ? model.N : labN)")
                 Chip(text: "tv = \(uiMode == .scenarios ? model.tvMs : labTv) ms")
@@ -286,12 +349,27 @@ struct ContentView: View {
 
                 // Human packers walking from pile to deposit
                 let data: [PackerViewModel] = (uiMode == .laboratory && !isRunning) ? labPackers : model.packers
-                ForEach(data) { p in
+                // Use enumerated indices to slightly separate each packer with lane offsets
+                ForEach(Array(data.enumerated()), id: \.element.id) { idx, p in
                     let progress = p.progress.clamped(to: 0...1)
                     let previous = lastProgressByPacker[p.id] ?? progress
                     let isGoingToDeposit = progress >= previous - 0.0001
-                    let hx = sourcePile.x + (leftCenter.x - sourcePile.x) * progress
-                    let hy = sourcePile.y + (leftCenter.y - sourcePile.y) * progress
+
+                    // Base path interpolation
+                    let hxBase = sourcePile.x + (leftCenter.x - sourcePile.x) * progress
+                    let hyBase = sourcePile.y + (leftCenter.y - sourcePile.y) * progress
+
+                    // Compute a small perpendicular offset to create visual separation (lanes)
+                    let vx = leftCenter.x - sourcePile.x
+                    let vy = leftCenter.y - sourcePile.y
+                    let len = max(1, hypot(vx, vy))
+                    let uxPerp = -vy / len
+                    let uyPerp =  vx / len
+                    let lane = CGFloat((idx % 5) - 2) // lanes: -2, -1, 0, 1, 2
+                    let separation: CGFloat = 10
+                    let hx = hxBase + uxPerp * lane * separation
+                    let hy = hyBase + uyPerp * lane * separation
+
                     ZStack {
                         Image(systemName: "figure.walk")
                             .font(.system(size: 32, weight: .regular))
@@ -310,11 +388,17 @@ struct ContentView: View {
                                 .offset(x: 14, y: -26)
                         }
                     }
+                    .contentShape(Rectangle())
                     .position(x: hx, y: hy)
                     // Slow down to make both forward and return trips clearly animated
                     .animation(.linear(duration: 0.9), value: p.progress)
                     .onChange(of: p.progress) { _, newValue in
                         lastProgressByPacker[p.id] = newValue.clamped(to: 0...1)
+                    }
+                    // Tap to edit in Laboratory mode
+                    .onTapGesture {
+                        guard uiMode == .laboratory else { return }
+                        beginEditingPacker(index: idx, packer: p)
                     }
                 }
 
