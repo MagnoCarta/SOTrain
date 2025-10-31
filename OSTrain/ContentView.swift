@@ -31,6 +31,7 @@ struct ContentView: View {
     @State private var newPackerName: String = ""
     @State private var newPackerTeMs: Int = 500
     @State private var lastProgressByPacker: [Int: Double] = [:]
+    @State private var packerMotionUntil: [Int: Date] = [:]
 
     @State private var showEditPackerSheet: Bool = false
     @State private var editingPackerIndex: Int? = nil
@@ -379,6 +380,7 @@ struct ContentView: View {
                     let progress = p.progress.clamped(to: 0...1)
                     let previous = lastProgressByPacker[p.id] ?? progress
                     let isGoingToDeposit = progress >= previous - 0.0001
+                    let isMoving = (p.status != .dormindo) && ((packerMotionUntil[p.id] ?? .distantPast) > Date())
 
                     // Base path interpolation
                     let hxBase = sourcePile.x + (leftCenter.x - sourcePile.x) * progress
@@ -391,12 +393,12 @@ struct ContentView: View {
                     let uxPerp = -vy / len
                     let uyPerp =  vx / len
                     let lane = CGFloat((idx % 5) - 2) // lanes: -2, -1, 0, 1, 2
-                    let separation: CGFloat = 10
+                    let separation: CGFloat = 14
                     let hx = hxBase + uxPerp * lane * separation
                     let hy = hyBase + uyPerp * lane * separation
 
                     ZStack {
-                        Image(systemName: "figure.walk")
+                        Image(systemName: isMoving ? "figure.walk.motion" : "figure.walk")
                             .font(.system(size: 32, weight: .regular))
                             .foregroundStyle(p.status == .dormindo ? .secondary : .primary)
                         // Show the carried box only when heading to deposit (forward) or sleeping (ready to deposit); hide during return walk
@@ -419,6 +421,7 @@ struct ContentView: View {
                     .animation(.linear(duration: 0.9), value: p.progress)
                     .onChange(of: p.progress) { _, newValue in
                         lastProgressByPacker[p.id] = newValue.clamped(to: 0...1)
+                        packerMotionUntil[p.id] = Date().addingTimeInterval(0.9)
                     }
                     // Tap to edit in Laboratory mode
                     .onTapGesture {
