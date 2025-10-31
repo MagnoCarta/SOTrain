@@ -29,6 +29,7 @@ struct ContentView: View {
     @State private var showAddPackerSheet: Bool = false
     @State private var newPackerName: String = ""
     @State private var newPackerTeMs: Int = 500
+    @State private var lastProgressByPacker: [Int: Double] = [:]
 
     var body: some View {
         VStack(spacing: 16) {
@@ -187,9 +188,39 @@ struct ContentView: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             HStack(spacing: 16) {
-                Stepper(value: $labM, in: 1...200) { Text("M = \(labM)") }
-                Stepper(value: $labN, in: 1...200) { Text("N = \(labN)") }
-                Stepper(value: $labTv, in: 50...10000, step: 50) { Text("tv = \(labTv) ms") }
+                // M (no upper limit) – stepper + direct input
+                HStack(spacing: 8) {
+                    Stepper(value: $labM, in: 1...Int.max) { Text("M = \(labM)") }
+                    TextField("M", value: $labM, format: .number)
+                        .frame(width: 70)
+                        .textFieldStyle(.roundedBorder)
+                        .multilineTextAlignment(.trailing)
+                        .onChange(of: labM) { _, newVal in
+                            if newVal < 1 { labM = 1 }
+                        }
+                }
+                // N (no upper limit) – stepper + direct input
+                HStack(spacing: 8) {
+                    Stepper(value: $labN, in: 1...Int.max) { Text("N = \(labN)") }
+                    TextField("N", value: $labN, format: .number)
+                        .frame(width: 70)
+                        .textFieldStyle(.roundedBorder)
+                        .multilineTextAlignment(.trailing)
+                        .onChange(of: labN) { _, newVal in
+                            if newVal < 1 { labN = 1 }
+                        }
+                }
+                // tv (no upper limit) – stepper + direct input
+                HStack(spacing: 8) {
+                    Stepper(value: $labTv, in: 1...Int.max, step: 50) { Text("tv = \(labTv) ms") }
+                    TextField("tv (ms)", value: $labTv, format: .number)
+                        .frame(width: 90)
+                        .textFieldStyle(.roundedBorder)
+                        .multilineTextAlignment(.trailing)
+                        .onChange(of: labTv) { _, newVal in
+                            if newVal < 1 { labTv = 1 }
+                        }
+                }
             }
             Text("Depósito: \(model.depositoCount)/\(model.M)")
                 .font(.headline)
@@ -257,14 +288,16 @@ struct ContentView: View {
                 let data: [PackerViewModel] = (uiMode == .laboratory && !isRunning) ? labPackers : model.packers
                 ForEach(data) { p in
                     let progress = p.progress.clamped(to: 0...1)
+                    let previous = lastProgressByPacker[p.id] ?? progress
+                    let isGoingToDeposit = progress >= previous - 0.0001
                     let hx = sourcePile.x + (leftCenter.x - sourcePile.x) * progress
                     let hy = sourcePile.y + (leftCenter.y - sourcePile.y) * progress
                     ZStack {
                         Image(systemName: "figure.walk")
                             .font(.system(size: 32, weight: .regular))
                             .foregroundStyle(p.status == .dormindo ? .secondary : .primary)
-                        // Show the carried box while packing, placing, and also while sleeping (box ready to deposit)
-                        if p.status == .colocando || p.status == .empacotando || p.status == .dormindo {
+                        // Show the carried box only when heading to deposit (forward) or sleeping (ready to deposit); hide during return walk
+                        if p.status == .dormindo || isGoingToDeposit {
                             Image(systemName: "shippingbox")
                                 .font(.system(size: 20))
                                 .offset(x: -12, y: -28)
@@ -280,6 +313,9 @@ struct ContentView: View {
                     .position(x: hx, y: hy)
                     // Slow down to make both forward and return trips clearly animated
                     .animation(.linear(duration: 0.9), value: p.progress)
+                    .onChange(of: p.progress) { _, newValue in
+                        lastProgressByPacker[p.id] = newValue.clamped(to: 0...1)
+                    }
                 }
 
                 // Train moving along a parabola
