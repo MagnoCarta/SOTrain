@@ -33,8 +33,7 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 16) {
             if uiMode == .scenarios { header } else { labHeader }
-            animation
-            packersSection
+            scene
             Spacer(minLength: 8)
         }
         .padding()
@@ -104,6 +103,49 @@ struct ContentView: View {
                     }
                 }
             }
+            ToolbarItem(placement: .secondaryAction) {
+                if uiMode == .laboratory {
+                    Button {
+                        newPackerName = ""
+                        newPackerTeMs = 500
+                        showAddPackerSheet = true
+                    } label: {
+                        Label("Adicionar Empacotador", systemImage: "plus")
+                    }
+                    .disabled(isRunning == false && uiMode == .laboratory && labPackers.count >= 32)
+                }
+            }
+        }
+        .sheet(isPresented: $showAddPackerSheet) {
+            NavigationStack {
+                Form {
+                    Section("Empacotador") {
+                        TextField("Nome", text: $newPackerName)
+                        Stepper(value: $newPackerTeMs, in: 50...6000, step: 50) {
+                            Text("te = \(newPackerTeMs) ms")
+                        }
+                    }
+                }
+                .navigationTitle("Novo Empacotador")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancelar") { showAddPackerSheet = false }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Adicionar") {
+                            if uiMode == .laboratory {
+                                if isRunning {
+                                    model.addPacker(name: newPackerName, teMs: newPackerTeMs)
+                                } else {
+                                    let newId = (labPackers.map { $0.id }.max() ?? 0) + 1
+                                    labPackers.append(PackerViewModel(id: newId, name: newPackerName.isEmpty ? "E\(newId)" : newPackerName, status: .empacotando, progress: 0, teMs: newPackerTeMs))
+                                }
+                            }
+                            showAddPackerSheet = false
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -161,120 +203,12 @@ struct ContentView: View {
         }
     }
 
-    private var packersSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Empacotadores")
-                    .font(.headline)
-                Spacer()
-                if uiMode == .laboratory {
-                    Button {
-                        newPackerName = ""
-                        newPackerTeMs = 500
-                        showAddPackerSheet = true
-                    } label: {
-                        Label("Adicionar", systemImage: "plus")
-                    }
-                    .disabled(isRunning == false && uiMode == .laboratory && labPackers.count >= 32)
-                }
-            }
-            packersGrid
-        }
-        .sheet(isPresented: $showAddPackerSheet) {
-            NavigationStack {
-                Form {
-                    Section("Empacotador") {
-                        TextField("Nome", text: $newPackerName)
-                        Stepper(value: $newPackerTeMs, in: 50...6000, step: 50) {
-                            Text("te = \(newPackerTeMs) ms")
-                        }
-                    }
-                }
-                .navigationTitle("Novo Empacotador")
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancelar") { showAddPackerSheet = false }
-                    }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Adicionar") {
-                            if uiMode == .laboratory {
-                                if isRunning {
-                                    model.addPacker(name: newPackerName, teMs: newPackerTeMs)
-                                } else {
-                                    let newId = (labPackers.map { $0.id }.max() ?? 0) + 1
-                                    labPackers.append(PackerViewModel(id: newId, name: newPackerName.isEmpty ? "E\(newId)" : newPackerName, status: .empacotando, progress: 0, teMs: newPackerTeMs))
-                                }
-                            }
-                            showAddPackerSheet = false
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private var packersGrid: some View {
-        let data: [PackerViewModel] = (uiMode == .laboratory && !isRunning) ? labPackers : model.packers
-        return VStack(alignment: .leading, spacing: 8) {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 12)], spacing: 12) {
-                ForEach(data) { p in
-                    ZStack(alignment: .topTrailing) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Text(p.name).bold()
-                                Spacer()
-                                Text(statusLabel(for: p.status))
-                                    .foregroundStyle(.secondary)
-                            }
-                            PackerAnimationView(status: p.status, progress: p.progress)
-                                .frame(height: 56)
-                                .animation(.easeInOut(duration: 0.2), value: p.status)
-                            ProgressView(value: p.progress)
-                            HStack {
-                                Text("te: \(p.teMs) ms")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                            }
-                        }
-                        .padding()
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-
-                        if uiMode == .laboratory {
-                            Button {
-                                if isRunning {
-                                    model.removePacker(id: p.id)
-                                } else {
-                                    if let idx = labPackers.firstIndex(where: { $0.id == p.id }) { labPackers.remove(at: idx) }
-                                }
-                            } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(6)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     private func statusLabel(for s: PackerStatus) -> String {
         switch s {
         case .empacotando: return "empacotando"
         case .colocando:   return "colocando"
         case .dormindo:    return "dormindo (depósito cheio)"
         }
-    }
-
-    private var trainPanel: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Trem: \(model.trainStatus.label)")
-                .font(.title3)
-            ProgressView(value: trainProgress)
-        }
-        .padding()
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 
     var trainProgress: Double {
@@ -285,42 +219,128 @@ struct ContentView: View {
         return model.trainStatus == .viajandoBParaA ? -1 : 1
     }
 
-    private var animation: some View {
+    private var scene: some View {
         GeometryReader { geo in
             let totalW = geo.size.width
-            let leftDockW = max(180.0, totalW * 0.1)
-            let rightDockW = max(220.0, totalW * 0.1)
-            let trainW: CGFloat = 92
-            let trainH: CGFloat = 92
+            let totalH = geo.size.height
+            let leftRadius: CGFloat = 60
+            let rightRadius: CGFloat = 60
+            let margin: CGFloat = 16
+            let leftCenter = CGPoint(x: max(leftRadius + margin, totalW * 0.12), y: 100)
+            let rightCenter = CGPoint(x: totalW - max(rightRadius + margin, totalW * 0.12), y: 100)
+            let sourcePile = CGPoint(x: leftCenter.x + leftRadius + 40, y: leftCenter.y + 80)
 
-            let trackStart = leftDockW
-            let trackEnd   = totalW - rightDockW - trainW
-            let x = trackStart + max(0, trackEnd - trackStart) * trainProgress
-            let baselineY: CGFloat = 80
+            // Train parameters
+            let t = trainProgress.clamped(to: 0...1)
+            let startX = leftCenter.x + leftRadius
+            let endX = rightCenter.x - rightRadius
+            let x = startX + (endX - startX) * t
+            let baseY: CGFloat = min(leftCenter.y, rightCenter.y)
+            let arcHeight: CGFloat = 80
+            let y = baseY - arcHeight * 4 * t * (1 - t)
 
-            ZStack(alignment: .topLeading) {
-                // Left: depósito
-                DepositView(count: model.depositoCount, capacity: model.M, color: .blue)
-                    .frame(width: leftDockW, height: 120)
-                    .position(x: leftDockW / 2, y: baselineY)
+            ZStack {
+                // Infinite boxes pile (source)
+                BoxPileView(center: sourcePile, rows: 3, cols: 5, spacing: 6)
+                    .opacity(0.9)
 
-                // Right: destino
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(Color.green)
-                    .frame(width: rightDockW, height: 120)
-                    .position(x: totalW - rightDockW / 2, y: baselineY)
+                // Left: circular deposit (fills with boxes)
+                CircularDepositView(count: model.depositoCount, capacity: model.M, radius: leftRadius)
+                    .position(leftCenter)
 
-                // Train at linear position
+                // Right: static circular destination filled with boxes (does not change)
+                CircularDepositView(count: model.M, capacity: model.M, radius: rightRadius)
+                    .position(rightCenter)
+                    .opacity(0.7)
+
+                // Human packers walking from pile to deposit
+                let data: [PackerViewModel] = (uiMode == .laboratory && !isRunning) ? labPackers : model.packers
+                ForEach(data) { p in
+                    let progress = p.progress.clamped(to: 0...1)
+                    let hx = sourcePile.x + (leftCenter.x - sourcePile.x) * progress
+                    let hy = sourcePile.y + (leftCenter.y - sourcePile.y) * progress
+                    ZStack {
+                        Image(systemName: "figure.walk")
+                            .font(.system(size: 28, weight: .regular))
+                            .foregroundStyle(.primary)
+                        if p.status == .colocando || p.status == .empacotando {
+                            Image(systemName: "shippingbox")
+                                .font(.system(size: 18))
+                                .offset(x: -10, y: -24)
+                        }
+                    }
+                    .position(x: hx, y: hy)
+                    .animation(.linear(duration: 0.2), value: p.progress)
+                }
+
+                // Train moving along a parabola
                 Image(.train)
                     .resizable()
                     .scaledToFit()
-                    .frame(width: trainW, height: trainH)
+                    .frame(width: 92, height: 92)
                     .scaleEffect(x: trainDirection, y: 1)
-                    .position(x: x + trainW / 2, y: baselineY)
+                    .position(x: x + 46, y: y)
+                    .shadow(radius: 2)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(height: 200)
+        .frame(height: 260)
+    }
+}
+
+private struct CircularDepositView: View {
+    let count: Int
+    let capacity: Int
+    let radius: CGFloat
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(.ultraThinMaterial)
+                .frame(width: radius * 2, height: radius * 2)
+                .overlay(
+                    Circle().stroke(.secondary.opacity(0.3), lineWidth: 1)
+                )
+            // Fill with boxes proportionally
+            let boxCount = max(0, min(count, capacity))
+            let grid = Int(ceil(sqrt(Double(max(1, capacity)))))
+            let cell = (radius * 2 - 16) / CGFloat(grid)
+            let startX = -((CGFloat(grid) * cell) - cell) / 2
+            let startY = -((CGFloat(grid) * cell) - cell) / 2
+            ForEach(0..<boxCount, id: \.self) { i in
+                let r = i / grid
+                let c = i % grid
+                Image(systemName: "shippingbox")
+                    .font(.system(size: max(10, cell * 0.6)))
+                    .foregroundStyle(.orange)
+                    .position(x: startX + CGFloat(c) * cell + radius, y: startY + CGFloat(r) * cell + radius)
+            }
+        }
+        .frame(width: radius * 2, height: radius * 2)
+    }
+}
+
+private struct BoxPileView: View {
+    let center: CGPoint
+    let rows: Int
+    let cols: Int
+    let spacing: CGFloat
+    var body: some View {
+        ZStack {
+            ForEach(0..<(rows*cols), id: \.self) { i in
+                let r = i / cols
+                let c = i % cols
+                Image(systemName: "shippingbox")
+                    .foregroundStyle(.orange)
+                    .position(x: center.x + CGFloat(c - cols/2) * spacing * 2,
+                              y: center.y + CGFloat(r - rows/2) * spacing * 2)
+            }
+        }
+    }
+}
+
+private extension Comparable {
+    func clamped(to range: ClosedRange<Self>) -> Self {
+        return min(max(self, range.lowerBound), range.upperBound)
     }
 }
 
