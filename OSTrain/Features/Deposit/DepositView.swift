@@ -15,8 +15,8 @@ struct DepositView: View {
     var body: some View {
         GeometryReader { geo in
             let pad: CGFloat = 8
-            let w = geo.size.width
-            let h = geo.size.height
+            let _ = geo.size.width
+            let _ = geo.size.height
 
             let bg = RoundedRectangle(cornerRadius: 8, style: .continuous)
             ZStack {

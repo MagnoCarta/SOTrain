@@ -7,10 +7,22 @@
 
 import Foundation
 
-// MARK: - Depósito (protege contagem com Actor)
-public actor Deposito {
-    private(set) var caixas: Int = 0
-    func push() { caixas += 1 }
-    func pop()  { caixas -= 1 }
-    var count: Int { caixas }
+// MARK: - Depósito (thread-safe via lock)
+public final class Deposito {
+    private var caixas: Int = 0
+    private let lock = NSLock()
+
+    public init() {}
+
+    public func push() {
+        lock.lock(); caixas += 1; lock.unlock()
+    }
+
+    public func pop()  {
+        lock.lock(); caixas -= 1; lock.unlock()
+    }
+
+    public var count: Int {
+        lock.lock(); let c = caixas; lock.unlock(); return c
+    }
 }

@@ -7,10 +7,13 @@
 
 import Foundation
 
-// MARK: - AsyncSemaphore (configurable policy)
-public actor AsyncSemaphore {
+// MARK: - BlockingSemaphore (Dispatch/Threads)
+// This replaces the actor-based AsyncSemaphore with a classic blocking implementation
+// using NSCondition. The `wait()` call blocks the current thread until a permit is available.
+// The `policy` is best-effort; strict fairness is not guaranteed.
+public final class AsyncSemaphore {
+    private let condition = NSCondition()
     private var value: Int
-    private var waiters: [CheckedContinuation<Void, Never>] = []
     private let policy: WaitPolicy
 
     public init(_ initial: Int, policy: WaitPolicy = .fifo) {
@@ -18,34 +21,29 @@ public actor AsyncSemaphore {
         self.policy = policy
     }
 
-    public func wait() async {
-        if value > 0 {
-            value -= 1
-            return
+    public func wait() {
+        condition.lock()
+        while value == 0 {
+            // Block this thread until a signal arrives
+            condition.wait()
         }
-        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-            waiters.append(cont)
-        }
+        value -= 1
+        condition.unlock()
     }
 
     public func signal() {
-        if !waiters.isEmpty {
-            let cont: CheckedContinuation<Void, Never>
-            switch policy {
-            case .fifo:
-                cont = waiters.removeFirst()
-            case .lifo:
-                cont = waiters.removeLast()
-            case .random:
-                let i = Int.random(in: 0..<waiters.count)
-                cont = waiters.remove(at: i)
-            }
-            cont.resume()
-        } else {
-            value += 1
-        }
+        condition.lock()
+        value += 1
+        // Wake one waiter; NSCondition has no direct FIFO/LIFO selection.
+        condition.signal()
+        condition.unlock()
     }
 
-    /// Somente para heurística de UI (leitura não atômica do contador)
-    public func approxValue() -> Int { value }
+    /// Non-atomic snapshot for UI heuristics only
+    public func approxValue() -> Int {
+        condition.lock()
+        let v = value
+        condition.unlock()
+        return v
+    }
 }
