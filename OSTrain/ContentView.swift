@@ -401,6 +401,7 @@ struct ContentView: View {
                         Image(systemName: isMoving ? "figure.walk.motion" : "figure.walk")
                             .font(.system(size: 32, weight: .regular))
                             .foregroundStyle(p.status == .dormindo ? .secondary : .primary)
+                            .symbolEffect(.bounce, value: isMoving)
                         // Show the carried box only when heading to deposit (forward) or sleeping (ready to deposit); hide during return walk
                         if p.status == .dormindo || isGoingToDeposit {
                             Image(systemName: "shippingbox")
