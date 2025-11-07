@@ -1,6 +1,7 @@
 import SwiftUI
 import Foundation
 import Observation
+import Combine
 
 
 // MARK: - SwiftUI
@@ -29,17 +30,28 @@ struct ContentView: View {
     @State private var showAddPackerSheet: Bool = false
     @State private var newPackerName: String = ""
     @State private var newPackerTeMs: Int = 500
+    @State private var lastProgressByPacker: [Int: Double] = [:]
+    @State private var packerMotionUntil: [Int: Date] = [:]
+
+    @State private var showEditPackerSheet: Bool = false
+    @State private var editingPackerIndex: Int? = nil
+    @State private var editingPackerId: Int? = nil
+    @State private var editPackerName: String = ""
+    @State private var editPackerTeMs: Int = 500
+    @State private var trainDisplayProgress: Double = 0
+    @State private var displayLink = Timer.publish(every: 1.0/60.0, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(spacing: 16) {
             if uiMode == .scenarios { header } else { labHeader }
-            animation
-            packersSection
+            scene
             Spacer(minLength: 8)
         }
         .padding()
         .onAppear {
             if isRunning { model.start() }
+            // Initialize display-linked progress to current model progress
+            trainDisplayProgress = trainProgress.clamped(to: 0...1)
         }
         .onChange(of: selectedScenario) { _, newValue in
             // If running, restart with the new scenario
@@ -48,6 +60,12 @@ struct ContentView: View {
                 model = buildModel(from: newValue)
                 model.start()
             }
+        }
+        .onReceive(displayLink) { _ in
+            // Smoothly interpolate the display progress toward the model's progress at 60 Hz
+            let target = trainProgress.clamped(to: 0...1)
+            let alpha: Double = 0.35 // smoothing factor (0-1); higher is snappier
+            trainDisplayProgress = (1 - alpha) * trainDisplayProgress + alpha * target
         }
         .toolbar {
             ToolbarItem(placement: .principal) {
@@ -104,89 +122,33 @@ struct ContentView: View {
                     }
                 }
             }
-        }
-    }
-
-    private func buildModel(from scenario: SimulationScenario) -> SimulationModel {
-        let cfg = scenario.config
-        return SimulationModel(M: cfg.M, N: cfg.N, tvMs: cfg.tvMs, packerTeMs: cfg.packerTeMs, policy: cfg.policy)
-    }
-
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(selectedScenario.config.title)
-                .font(.title2).bold()
-            Text(selectedScenario.config.description)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            Text("Depósito: \(model.depositoCount)/\(model.M)")
-                .font(.headline)
-            ProgressView(value: Double(model.depositoCount), total: Double(model.M))
-            HStack(spacing: 12) {
-                Chip(text: "N = \(model.N)")
-                Chip(text: "tv = \(model.tvMs) ms")
-                Chip(text: "Empacotadores: \(model.packers.count)")
-                Text("Timer: \(time)")
-            }
-        }.onAppear {
-            Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true, block: { _ in
-                Task { @MainActor in
-                    time += 0.1
-                }
-            })
-        }
-    }
-
-    private var labHeader: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Laboratory")
-                .font(.title2).bold()
-            Text("Defina M, N e tv antes de iniciar. Você pode adicionar/remover empacotadores a qualquer momento neste modo.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            HStack(spacing: 16) {
-                Stepper(value: $labM, in: 1...200) { Text("M = \(labM)") }
-                Stepper(value: $labN, in: 1...200) { Text("N = \(labN)") }
-                Stepper(value: $labTv, in: 50...10000, step: 50) { Text("tv = \(labTv) ms") }
-            }
-            Text("Depósito: \(model.depositoCount)/\(model.M)")
-                .font(.headline)
-            ProgressView(value: Double(model.depositoCount), total: Double(model.M))
-            HStack(spacing: 12) {
-                Chip(text: "N = \(uiMode == .scenarios ? model.N : labN)")
-                Chip(text: "tv = \(uiMode == .scenarios ? model.tvMs : labTv) ms")
-                Chip(text: "Empacotadores: \(uiMode == .laboratory && !isRunning ? labPackers.count : model.packers.count)")
-                Text("Timer: \(time)")
-            }
-        }
-    }
-
-    private var packersSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Empacotadores")
-                    .font(.headline)
-                Spacer()
+            ToolbarItem(placement: .secondaryAction) {
                 if uiMode == .laboratory {
                     Button {
                         newPackerName = ""
                         newPackerTeMs = 500
                         showAddPackerSheet = true
                     } label: {
-                        Label("Adicionar", systemImage: "plus")
+                        Label("Adicionar Empacotador", systemImage: "plus")
                     }
                     .disabled(isRunning == false && uiMode == .laboratory && labPackers.count >= 32)
                 }
             }
-            packersGrid
         }
         .sheet(isPresented: $showAddPackerSheet) {
             NavigationStack {
                 Form {
                     Section("Empacotador") {
                         TextField("Nome", text: $newPackerName)
-                        Stepper(value: $newPackerTeMs, in: 50...6000, step: 50) {
-                            Text("te = \(newPackerTeMs) ms")
+                        HStack(spacing: 8) {
+                            Stepper(value: $newPackerTeMs, in: 1...Int.max, step: 50) { Text("te = \(newPackerTeMs) ms") }
+                            TextField("te (ms)", value: $newPackerTeMs, format: .number)
+                                .frame(width: 90)
+                                .textFieldStyle(.roundedBorder)
+                                .multilineTextAlignment(.trailing)
+                                .onChange(of: newPackerTeMs) { _, newVal in
+                                    if newVal < 1 { newPackerTeMs = 1 }
+                                }
                         }
                     }
                 }
@@ -211,50 +173,152 @@ struct ContentView: View {
                 }
             }
         }
-    }
-
-    private var packersGrid: some View {
-        let data: [PackerViewModel] = (uiMode == .laboratory && !isRunning) ? labPackers : model.packers
-        return VStack(alignment: .leading, spacing: 8) {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 12)], spacing: 12) {
-                ForEach(data) { p in
-                    ZStack(alignment: .topTrailing) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Text(p.name).bold()
-                                Spacer()
-                                Text(statusLabel(for: p.status))
-                                    .foregroundStyle(.secondary)
-                            }
-                            PackerAnimationView(status: p.status, progress: p.progress)
-                                .frame(height: 56)
-                                .animation(.easeInOut(duration: 0.2), value: p.status)
-                            ProgressView(value: p.progress)
-                            HStack {
-                                Text("te: \(p.teMs) ms")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                            }
-                        }
-                        .padding()
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-
-                        if uiMode == .laboratory {
-                            Button {
-                                if isRunning {
-                                    model.removePacker(id: p.id)
-                                } else {
-                                    if let idx = labPackers.firstIndex(where: { $0.id == p.id }) { labPackers.remove(at: idx) }
+        .sheet(isPresented: $showEditPackerSheet) {
+            NavigationStack {
+                Form {
+                    Section("Empacotador") {
+                        TextField("Nome", text: $editPackerName)
+                        HStack(spacing: 8) {
+                            Stepper(value: $editPackerTeMs, in: 1...Int.max, step: 50) { Text("te = \(editPackerTeMs) ms") }
+                            TextField("te (ms)", value: $editPackerTeMs, format: .number)
+                                .frame(width: 90)
+                                .textFieldStyle(.roundedBorder)
+                                .multilineTextAlignment(.trailing)
+                                .onChange(of: editPackerTeMs) { _, newVal in
+                                    if newVal < 1 { editPackerTeMs = 1 }
                                 }
+                        }
+                    }
+                    if uiMode == .laboratory && !isRunning {
+                        Section {
+                            Button(role: .destructive) {
+                                if let idx = editingPackerIndex, uiMode == .laboratory && !isRunning {
+                                    labPackers.remove(at: idx)
+                                }
+                                showEditPackerSheet = false
                             } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .foregroundStyle(.secondary)
+                                Label("Remover Empacotador", systemImage: "trash")
                             }
-                            .padding(6)
                         }
                     }
                 }
+                .navigationTitle("Editar Empacotador")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancelar") { showEditPackerSheet = false }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Salvar") {
+                            if uiMode == .laboratory && !isRunning {
+                                if let idx = editingPackerIndex, labPackers.indices.contains(idx) {
+                                    labPackers[idx].name = editPackerName.isEmpty ? labPackers[idx].name : editPackerName
+                                    labPackers[idx].teMs = editPackerTeMs
+                                }
+                            } else if uiMode == .laboratory && isRunning {
+                                // Best-effort update when running: update visible model packer if index is valid
+                                if let idx = editingPackerIndex, model.packers.indices.contains(idx) {
+                                    model.packers[idx].name = editPackerName.isEmpty ? model.packers[idx].name : editPackerName
+                                    model.packers[idx].teMs = editPackerTeMs
+                                }
+                            }
+                            showEditPackerSheet = false
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func beginEditingPacker(index: Int, packer: PackerViewModel) {
+        editingPackerIndex = index
+        editingPackerId = packer.id
+        editPackerName = packer.name
+        editPackerTeMs = packer.teMs
+        showEditPackerSheet = true
+    }
+
+    private func buildModel(from scenario: SimulationScenario) -> SimulationModel {
+        let cfg = scenario.config
+        return SimulationModel(M: cfg.M, N: cfg.N, tvMs: cfg.tvMs, packerTeMs: cfg.packerTeMs, policy: cfg.policy)
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(selectedScenario.config.title)
+                .font(.title2).bold()
+            Text(selectedScenario.config.description)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Text("Depósito: \(model.depositoCount)/\(model.M)")
+                .font(.headline)
+            ProgressView(value: Double(model.depositoCount.clamped(to: 0...max(1, model.M))),
+                         total: Double(max(1, model.M)))
+            HStack(spacing: 12) {
+                Chip(text: "N = \(model.N)")
+                Chip(text: "tv = \(model.tvMs) ms")
+                Chip(text: "Empacotadores: \(model.packers.count)")
+                Text("Timer: \(time)")
+            }
+        }.onAppear {
+            Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true, block: { _ in
+                Task { @MainActor in
+                    time += 0.1
+                }
+            })
+        }
+    }
+
+    private var labHeader: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Laboratory")
+                .font(.title2).bold()
+            Text("Defina M, N e tv antes de iniciar. Você pode adicionar/remover empacotadores a qualquer momento neste modo.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 16) {
+                // M (no upper limit) – stepper + direct input
+                HStack(spacing: 8) {
+                    Stepper(value: $labM, in: 1...Int.max) { Text("M = \(labM)") }
+                    TextField("M", value: $labM, format: .number)
+                        .frame(width: 70)
+                        .textFieldStyle(.roundedBorder)
+                        .multilineTextAlignment(.trailing)
+                        .onChange(of: labM) { _, newVal in
+                            if newVal < 1 { labM = 1 }
+                        }
+                }
+                // N (no upper limit) – stepper + direct input
+                HStack(spacing: 8) {
+                    Stepper(value: $labN, in: 1...Int.max) { Text("N = \(labN)") }
+                    TextField("N", value: $labN, format: .number)
+                        .frame(width: 70)
+                        .textFieldStyle(.roundedBorder)
+                        .multilineTextAlignment(.trailing)
+                        .onChange(of: labN) { _, newVal in
+                            if newVal < 1 { labN = 1 }
+                        }
+                }
+                // tv (no upper limit) – stepper + direct input
+                HStack(spacing: 8) {
+                    Stepper(value: $labTv, in: 1...Int.max, step: 50) { Text("tv = \(labTv) ms") }
+                    TextField("tv (ms)", value: $labTv, format: .number)
+                        .frame(width: 90)
+                        .textFieldStyle(.roundedBorder)
+                        .multilineTextAlignment(.trailing)
+                        .onChange(of: labTv) { _, newVal in
+                            if newVal < 1 { labTv = 1 }
+                        }
+                }
+            }
+            Text("Depósito: \(model.depositoCount)/\(model.M)")
+                .font(.headline)
+            ProgressView(value: Double(model.depositoCount.clamped(to: 0...max(1, model.M))),
+                         total: Double(max(1, model.M)))
+            HStack(spacing: 12) {
+                Chip(text: "N = \(uiMode == .scenarios ? model.N : labN)")
+                Chip(text: "tv = \(uiMode == .scenarios ? model.tvMs : labTv) ms")
+                Chip(text: "Empacotadores: \(uiMode == .laboratory && !isRunning ? labPackers.count : model.packers.count)")
+                Text("Timer: \(time)")
             }
         }
     }
@@ -267,16 +331,6 @@ struct ContentView: View {
         }
     }
 
-    private var trainPanel: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Trem: \(model.trainStatus.label)")
-                .font(.title3)
-            ProgressView(value: trainProgress)
-        }
-        .padding()
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
-    }
-
     var trainProgress: Double {
         return model.trainStatus == .viajandoBParaA ? 1 - model.trainProgress : model.trainProgress
     }
@@ -285,42 +339,166 @@ struct ContentView: View {
         return model.trainStatus == .viajandoBParaA ? -1 : 1
     }
 
-    private var animation: some View {
+    private var scene: some View {
         GeometryReader { geo in
             let totalW = geo.size.width
-            let leftDockW = max(180.0, totalW * 0.1)
-            let rightDockW = max(220.0, totalW * 0.1)
-            let trainW: CGFloat = 92
-            let trainH: CGFloat = 92
+            let totalH = geo.size.height
+            let leftRadius: CGFloat = 60
+            let rightRadius: CGFloat = 60
+            let margin: CGFloat = 16
+            let leftCenter = CGPoint(x: max(leftRadius + margin, totalW * 0.12), y: 100)
+            let rightCenter = CGPoint(x: totalW - max(rightRadius + margin, totalW * 0.12), y: 100)
+            let sourcePile = CGPoint(x: leftCenter.x + leftRadius + 180, y: leftCenter.y + 120)
 
-            let trackStart = leftDockW
-            let trackEnd   = totalW - rightDockW - trainW
-            let x = trackStart + max(0, trackEnd - trackStart) * trainProgress
-            let baselineY: CGFloat = 80
+            // Train parameters
+            let t = trainDisplayProgress.clamped(to: 0...1)
+            let startX = leftCenter.x + leftRadius
+            let endX = rightCenter.x - rightRadius
+            let x = startX + (endX - startX) * t
+            let baseY: CGFloat = min(leftCenter.y, rightCenter.y)
+            let arcHeight: CGFloat = 80
+            let y = baseY - arcHeight * 4 * t * (1 - t)
 
-            ZStack(alignment: .topLeading) {
-                // Left: depósito
-                DepositView(count: model.depositoCount, capacity: model.M, color: .blue)
-                    .frame(width: leftDockW, height: 120)
-                    .position(x: leftDockW / 2, y: baselineY)
+            ZStack {
+                // Infinite boxes pile (source)
+                BoxPileView(center: sourcePile, rows: 3, cols: 5, spacing: 6)
+                    .opacity(0.9)
 
-                // Right: destino
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(Color.green)
-                    .frame(width: rightDockW, height: 120)
-                    .position(x: totalW - rightDockW / 2, y: baselineY)
+                // Left: circular deposit (fills with boxes)
+                CircularDepositView(count: model.depositoCount, capacity: model.M, radius: leftRadius)
+                    .position(leftCenter)
 
-                // Train at linear position
+                // Right: static circular destination filled with boxes (does not change)
+                CircularDepositView(count: model.M, capacity: model.M, radius: rightRadius)
+                    .position(rightCenter)
+                    .opacity(0.7)
+
+                // Human packers walking from pile to deposit
+                let data: [PackerViewModel] = (uiMode == .laboratory && !isRunning) ? labPackers : model.packers
+                // Use enumerated indices to slightly separate each packer with lane offsets
+                ForEach(Array(data.enumerated()), id: \.element.id) { idx, p in
+                    let progress = p.progress.clamped(to: 0...1)
+                    let previous = lastProgressByPacker[p.id] ?? progress
+                    let isGoingToDeposit = progress >= previous - 0.0001
+                    let isMoving = (p.status != .dormindo) && ((packerMotionUntil[p.id] ?? .distantPast) > Date())
+
+                    // Base path interpolation
+                    let hxBase = sourcePile.x + (leftCenter.x - sourcePile.x) * progress
+                    let hyBase = sourcePile.y + (leftCenter.y - sourcePile.y) * progress
+
+                    // Compute a small perpendicular offset to create visual separation (lanes)
+                    let vx = leftCenter.x - sourcePile.x
+                    let vy = leftCenter.y - sourcePile.y
+                    let len = max(1, hypot(vx, vy))
+                    let uxPerp = -vy / len
+                    let uyPerp =  vx / len
+                    let lane = CGFloat((idx % 5) - 2) // lanes: -2, -1, 0, 1, 2
+                    let separation: CGFloat = 14
+                    let hx = hxBase + uxPerp * lane * separation
+                    let hy = hyBase + uyPerp * lane * separation
+
+                    ZStack {
+                        Image(systemName: isMoving ? "figure.walk.motion" : "figure.walk")
+                            .font(.system(size: 32, weight: .regular))
+                            .foregroundStyle(p.status == .dormindo ? .secondary : .primary)
+                            .symbolEffect(.bounce, value: isMoving)
+                        // Show the carried box only when heading to deposit (forward) or sleeping (ready to deposit); hide during return walk
+                        if p.status == .dormindo || isGoingToDeposit {
+                            Image(systemName: "shippingbox")
+                                .font(.system(size: 20))
+                                .offset(x: -12, y: -28)
+                        }
+                        // Add a subtle sleep indicator when dormant
+                        if p.status == .dormindo {
+                            Image(systemName: "zzz")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                                .offset(x: 14, y: -26)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                    .position(x: hx, y: hy)
+                    // Slow down to make both forward and return trips clearly animated
+                    .animation(.linear(duration: 0.9), value: p.progress)
+                    .onChange(of: p.progress) { _, newValue in
+                        lastProgressByPacker[p.id] = newValue.clamped(to: 0...1)
+                        packerMotionUntil[p.id] = Date().addingTimeInterval(0.9)
+                    }
+                    // Tap to edit in Laboratory mode
+                    .onTapGesture {
+                        guard uiMode == .laboratory else { return }
+                        beginEditingPacker(index: idx, packer: p)
+                    }
+                }
+
+                // Train moving along a parabola
                 Image(.train)
                     .resizable()
                     .scaledToFit()
-                    .frame(width: trainW, height: trainH)
+                    .frame(width: 92, height: 92)
                     .scaleEffect(x: trainDirection, y: 1)
-                    .position(x: x + trainW / 2, y: baselineY)
+                    .position(x: x + 46, y: y)
+                    .shadow(radius: 2)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(height: 200)
+        .frame(height: 260)
+    }
+}
+
+private struct CircularDepositView: View {
+    let count: Int
+    let capacity: Int
+    let radius: CGFloat
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(.ultraThinMaterial)
+                .frame(width: radius * 2, height: radius * 2)
+                .overlay(
+                    Circle().stroke(.secondary.opacity(0.3), lineWidth: 1)
+                )
+            // Fill with boxes proportionally
+            let boxCount = max(0, min(count, capacity))
+            let grid = Int(ceil(sqrt(Double(max(1, capacity)))))
+            let cell = (radius * 2 - 16) / CGFloat(grid)
+            let startX = -((CGFloat(grid) * cell) - cell) / 2
+            let startY = -((CGFloat(grid) * cell) - cell) / 2
+            ForEach(0..<boxCount, id: \.self) { i in
+                let r = i / grid
+                let c = i % grid
+                Image(systemName: "shippingbox")
+                    .font(.system(size: max(10, cell * 0.6)))
+                    .foregroundStyle(.orange)
+                    .position(x: startX + CGFloat(c) * cell + radius, y: startY + CGFloat(r) * cell + radius)
+            }
+        }
+        .frame(width: radius * 2, height: radius * 2)
+    }
+}
+
+private struct BoxPileView: View {
+    let center: CGPoint
+    let rows: Int
+    let cols: Int
+    let spacing: CGFloat
+    var body: some View {
+        ZStack {
+            ForEach(0..<(rows*cols), id: \.self) { i in
+                let r = i / cols
+                let c = i % cols
+                Image(systemName: "shippingbox")
+                    .foregroundStyle(.orange)
+                    .position(x: center.x + CGFloat(c - cols/2) * spacing * 2,
+                              y: center.y + CGFloat(r - rows/2) * spacing * 2)
+            }
+        }
+    }
+}
+
+private extension Comparable {
+    func clamped(to range: ClosedRange<Self>) -> Self {
+        return min(max(self, range.lowerBound), range.upperBound)
     }
 }
 
@@ -336,3 +514,4 @@ struct Chip: View {
             .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }
+

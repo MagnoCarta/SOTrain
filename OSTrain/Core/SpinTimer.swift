@@ -7,35 +7,47 @@
 
 import Foundation
 
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
+
 struct SpinTimer {
-    /// CPU-bound por `durationMs` com frames ~`fps`, a própria task gera os frames.
+    /// CPU-bound for `durationMs` and posts ~`fps` frame updates.
+    /// This function is synchronous and blocks the calling thread to intentionally burn CPU.
     static func cpuBurn(
         durationMs: Int,
         fps: Int = 60,
-        onFrame: @MainActor @Sendable @escaping (Double) -> Void
-    ) async {
-        let clock = ContinuousClock()
-        let start = clock.now
-        let frameInterval = Duration.nanoseconds(1_000_000_000 / max(1, fps))
-        var nextFrame = start + frameInterval // first frame after one interval
-        let deadline = start + .milliseconds(durationMs)
+        onFrame: @escaping (Double) -> Void
+    ) {
+        let durationSec = max(0.001, Double(durationMs) / 1000.0)
+        let frameInterval = 1.0 / Double(max(1, fps))
+
+        let start = CFAbsoluteTimeGetCurrent()
+        var nextFrame = start + frameInterval
+        let deadline = start + durationSec
 
         @inline(__always) func burnChunk() {
-            var acc = 0
-            for k in 1...2000 { acc &+= k &* k }
+            // Small deterministic integer math to keep the core busy
+            var acc: Int = 0
+            for k in 1...4000 { acc &+= k &* k }
             _ = acc
         }
 
-        while clock.now < deadline {
+        while CFAbsoluteTimeGetCurrent() < deadline {
             burnChunk()
-            if clock.now >= nextFrame {
-                let elapsed = clock.now - start
-                let p = min(1.0, max(0.0, elapsed.millisecondsDouble / Double(durationMs)))
-                onFrame(p)
+            let now = CFAbsoluteTimeGetCurrent()
+            if now >= nextFrame {
+                let elapsed = now - start
+                let p = min(1.0, max(0.0, elapsed / durationSec))
+                DispatchQueue.main.async { onFrame(p) }
                 nextFrame += frameInterval
             }
-            await Task.yield() // coopera com o escalonador, sem dormir
+            // Cooperate a little with the scheduler without sleeping
+            Darwin.sched_yield()
         }
-        onFrame(1.0)
+        DispatchQueue.main.async { onFrame(1.0) }
     }
 }
+
